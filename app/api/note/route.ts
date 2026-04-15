@@ -4,52 +4,31 @@ import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { content } = body;
+    const { content } = await req.json();
 
     if (!content) {
-      return NextResponse.json(
-        { error: "Content required" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Content required" }, { status: 400 });
     }
 
-    // 🧠 1. Get existing categories
-    const existingCategoriesData = await prisma.category.findMany({
-      select: { name: true },
-    });
-
-    const existingCategories = existingCategoriesData.map((c) => c.name);
-
-    // 🤖 2. AI classification
     const aiRes = await groq.chat.completions.create({
-      model: "llama-3.1-8b-instant",
+      model: "openai/gpt-oss-20b",
       messages: [
         {
           role: "system",
           content: `
-You are a smart note classification system.
+Extract knowledge graph from text.
 
-Your job:
-1. Extract 3-5 short tags (lowercase, single words)
-2. Assign ONE category
+Rules:
+- Concepts = nouns / important terms
+- Keep them SHORT (1-2 words)
+- Normalize (React.js → React)
 
-CRITICAL RULES:
-- Reuse existing categories if relevant
-- Do NOT create new categories unnecessarily
-- Similar meanings MUST map to SAME category
-
-Examples:
-- "hi", "hello" → General
-- React, Next.js → Web Development
-
-Existing categories:
-${existingCategories.join(", ") || "None"}
-
-Return ONLY valid JSON:
+Return STRICT JSON:
 {
-  "tags": [],
-  "category": ""
+  "concepts": [],
+  "relations": [
+    { "from": "", "to": "", "type": "" }
+  ]
 }
 `,
         },
@@ -60,76 +39,82 @@ Return ONLY valid JSON:
       ],
     });
 
-    const aiText = aiRes.choices[0].message.content || "{}";
-
-    // 🛡️ Safe JSON parsing
-    const cleaned = aiText.replace(/```json|```/g, "").trim();
-
     let parsed;
     try {
-      parsed = JSON.parse(cleaned);
+      parsed = JSON.parse(aiRes.choices[0].message.content || "{}");
     } catch {
-      parsed = { tags: [], category: "General" };
+      parsed = { concepts: [], relations: [] };
     }
 
-    const tags: string[] = parsed.tags || [];
-    const categoryName: string =
-      parsed.category?.trim() || "General";
+    const concepts: string[] = parsed.concepts || [];
+    const relations = parsed.relations || [];
 
-    // 🗂️ 3. Find or create category
-    let category = await prisma.category.findUnique({
-      where: { name: categoryName },
-    });
-
-    if (!category) {
-      category = await prisma.category.create({
-        data: { name: categoryName },
-      });
-    }
-
-    // 📝 4. Create note
+   
     const note = await prisma.note.create({
-      data: {
-        content,
-        categoryId: category.id,
-      },
+      data: { content },
     });
 
-    // 🏷️ 5. Handle tags (many-to-many)
-    for (const tagName of tags) {
-      const cleanTag = tagName.toLowerCase().trim();
+    
+    const conceptMap: Record<string, string> = {};
 
-      if (!cleanTag) continue;
+    for (const c of concepts) {
+      const name = c.trim().toLowerCase();
 
-      let tag = await prisma.tag.findUnique({
-        where: { name: cleanTag },
+      if (!name) continue;
+
+      const concept = await prisma.concept.upsert({
+        where: { name },
+        update: {},
+        create: { name },
       });
 
-      if (!tag) {
-        tag = await prisma.tag.create({
-          data: { name: cleanTag },
-        });
-      }
+      conceptMap[name] = concept.id;
 
-      await prisma.noteTag.create({
+      await prisma.noteConcept.create({
         data: {
           noteId: note.id,
-          tagId: tag.id,
+          conceptId: concept.id,
         },
       });
     }
 
-    return NextResponse.json({ success: true });
+   
+    for (const r of relations) {
+      const from = r.from?.toLowerCase().trim();
+      const to = r.to?.toLowerCase().trim();
+      const type = r.type?.toLowerCase().trim() || "related";
+
+      if (!from || !to) continue;
+      if (!conceptMap[from] || !conceptMap[to]) continue;
+
+      await prisma.relation.upsert({
+        where: {
+          fromId_toId_type: {
+            fromId: conceptMap[from],
+            toId: conceptMap[to],
+            type,
+          },
+        },
+        update: {},
+        create: {
+          fromId: conceptMap[from],
+          toId: conceptMap[to],
+          type,
+        },
+      });
+    }
+
+    return NextResponse.json({ note });
   } catch (err) {
     console.error(err);
     return NextResponse.json(
       { error: "Something went wrong" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
 
-// 📥 GET with relations
+
 export async function GET() {
   const notes = await prisma.note.findMany({
     include: {
