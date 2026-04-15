@@ -6,6 +6,7 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
 model Note {
   id         String   @id @default(cuid())
   content    String
@@ -16,8 +17,12 @@ model Note {
   category   Category? @relation(fields: [categoryId], references: [id])
 
   tags       NoteTag[]
+
   outgoing   Connection[] @relation("From")
   incoming   Connection[] @relation("To")
+
+  
+  concepts   NoteConcept[]
 }
 
 model Category {
@@ -55,4 +60,45 @@ model Connection {
 
   from     Note @relation("From", fields: [fromId], references: [id])
   to       Note @relation("To", fields: [toId], references: [id])
+
+
+  @@unique([fromId, toId])
+}
+
+model Concept {
+  id    String   @id @default(cuid())
+  name  String   @unique
+
+  notes NoteConcept[]
+
+  
+  outgoing Relation[] @relation("ConceptFrom")
+  incoming Relation[] @relation("ConceptTo")
+}
+
+model NoteConcept {
+  id        String  @id @default(cuid())
+  noteId    String
+  conceptId String
+
+  note    Note    @relation(fields: [noteId], references: [id])
+  concept Concept @relation(fields: [conceptId], references: [id])
+
+  
+  @@unique([noteId, conceptId])
+}
+
+model Relation {
+  id     String @id @default(cuid())
+
+  fromId String
+  toId   String
+  type   String
+
+
+  from   Concept @relation("ConceptFrom", fields: [fromId], references: [id])
+  to     Concept @relation("ConceptTo", fields: [toId], references: [id])
+
+
+  @@unique([fromId, toId, type])
 }
