@@ -1,9 +1,7 @@
+import { groq } from "@/lib/ai/groq";
 import { prisma } from "@/lib/db";
-import { getEmbedding } from "@/lib/rag/embedding";
-import { cosineSimilarity } from "@/lib/rag/similarity";
-import { NextRequest, NextResponse } from "next/server";
 
-import { openai } from "@/lib/ai/openai";
+import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(req: NextRequest) {
   try {
@@ -11,27 +9,44 @@ export async function POST(req: NextRequest) {
     const { content } = body;
 
     if (!content) {
-      return NextResponse.json(
-        { error: "Content required" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Content required" }, { status: 400 });
     }
 
-    // 🧠 1. Generate embedding
-    const embedding = await getEmbedding(content);
+    const existingNotes = await prisma.note.findMany({
+      select: { category: true },
+    });
 
-    // 🤖 2. AI tags + category
-    const aiRes = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+    const existingCategories = [
+      ...new Set(existingNotes.map((n) => n.category).filter(Boolean)),
+    ];
+
+    const aiRes = await groq.chat.completions.create({
+      model: "openai/gpt-oss-20b",
       messages: [
         {
           role: "system",
           content: `
-Extract:
-1. Tags (max 5)
-2. One category
+You are a smart note classification system.
 
-Return JSON:
+Your job:
+1. Extract 3-5 short tags
+2. Assign ONE category
+
+CRITICAL RULES:
+- You MUST reuse existing categories if relevant
+- DO NOT create new categories unnecessarily
+- Similar meanings MUST map to SAME category
+
+Examples:
+- "hi", "hello", "hey" → category: "General"
+- React, Next.js → category: "Web Development"
+
+Existing categories:
+${existingCategories.join(", ") || "None"}
+
+If no suitable category exists, create a new one.
+
+Return ONLY valid JSON:
 {
   "tags": [],
   "category": ""
@@ -57,11 +72,11 @@ Return JSON:
     const tags = parsed.tags || [];
     const category = parsed.category || "General";
 
-    // 💾 3. Save note
+  
     const note = await prisma.note.create({
       data: {
         content,
-        embedding,
+
         tags,
         category,
       },
@@ -72,7 +87,7 @@ Return JSON:
     console.error(err);
     return NextResponse.json(
       { error: "Something went wrong" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

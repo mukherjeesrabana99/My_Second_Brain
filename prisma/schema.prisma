@@ -7,18 +7,52 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 model Note {
-  id        String   @id @default(cuid())
-  content   String
-  summary   String?
-  embedding Float[]
-  tags      String[]
-  category  String?
-  createdAt DateTime @default(now())
+  id         String   @id @default(cuid())
+  content    String
+  summary    String?
+  createdAt  DateTime @default(now())
+
+  categoryId String?
+  category   Category? @relation(fields: [categoryId], references: [id])
+
+  tags       NoteTag[]
+  outgoing   Connection[] @relation("From")
+  incoming   Connection[] @relation("To")
+}
+
+model Category {
+  id    String @id @default(cuid())
+  name  String @unique
+
+  notes Note[]
+}
+
+model Tag {
+  id    String @id @default(cuid())
+  name  String @unique
+
+  notes NoteTag[]
+}
+
+model NoteTag {
+  id     String @id @default(cuid())
+
+  noteId String
+  tagId  String
+
+  note   Note @relation(fields: [noteId], references: [id])
+  tag    Tag  @relation(fields: [tagId], references: [id])
+
+  @@unique([noteId, tagId])
 }
 
 model Connection {
-  id         String @id @default(cuid())
-  fromId     String
-  toId       String
-  strength   Float
+  id       String @id @default(cuid())
+
+  fromId   String
+  toId     String
+  strength Float?
+
+  from     Note @relation("From", fields: [fromId], references: [id])
+  to       Note @relation("To", fields: [toId], references: [id])
 }
